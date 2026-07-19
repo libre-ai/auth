@@ -15,8 +15,12 @@ export interface StartedLogin {
 }
 
 export type CompletedLogin =
-  | { ok: true; facts: SessionIdentityFacts }
+  | { ok: true; facts: SessionIdentityFacts; returnPath: string }
   | { ok: false; code: "auth.oidc_state_invalid" | "auth.oidc_claim_invalid" };
+
+// Anti open-redirect boundary shared with auth.v1: an absolute local path
+// that never starts with "//" and never carries a scheme or authority.
+export const RETURN_PATH_PATTERN = /^\/(?!\/)[A-Za-z0-9/_-]*$/;
 
 export type TokenEndpoint = (request: {
   audience: string;
@@ -53,7 +57,10 @@ export class OidcLoginFlow {
     return new OidcLoginFlow(rest, await importHmacKey(transactionDigestKey));
   }
 
-  async start(): Promise<StartedLogin> {
+  async start(returnPath = "/"): Promise<StartedLogin> {
+    if (!RETURN_PATH_PATTERN.test(returnPath) || returnPath.length > 512) {
+      throw new Error("auth.oidc_state_invalid");
+    }
     const state = randomOpaqueValue();
     const nonce = randomOpaqueValue();
     const verifier = randomOpaqueValue(48);
@@ -65,6 +72,7 @@ export class OidcLoginFlow {
       cookieDigest: await hmacSha256Hex(this.digestKey, transactionCookieValue),
       expiresAtMs: this.options.clock.now().getTime() + OIDC_TRANSACTION_LIFETIME_MS,
       nonce,
+      returnPath,
       state,
       verifier,
     });
@@ -137,6 +145,7 @@ export class OidcLoginFlow {
         userId: membership.userId,
       },
       ok: true,
+      returnPath: transaction.returnPath,
     };
   }
 }

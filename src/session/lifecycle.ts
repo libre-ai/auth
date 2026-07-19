@@ -83,9 +83,11 @@ export class SessionService {
       }
       return { code: "auth.session_expired", ok: false };
     }
+    // Sliding the idle window is server telemetry, not a client-locked
+    // mutation: bumping the optimistic revision here would make every
+    // If-Match precondition stale by construction.
     record.lastSeenAt = now.toISOString();
     record.idleExpiresAt = new Date(now.getTime() + IDLE_TIMEOUT_MS).toISOString();
-    record.revision += 1;
     await this.persist(record);
     return { ok: true, record: structuredClone(record) };
   }
@@ -107,6 +109,22 @@ export class SessionService {
       csrfToken: nextCsrfToken,
       record: structuredClone(record),
     };
+  }
+
+  // Server-side only: gives the document renderer a fresh CSRF token
+  // (digest replaced, cookie unchanged) so the raw secret never needs to
+  // be stored or read back.
+  async refreshCsrfSecret(cookieValue: string): Promise<{ csrfToken: string }> {
+    const resolved = await this.resolveSession(cookieValue);
+    if (!resolved.ok) {
+      throw new Error(resolved.code);
+    }
+    const record = resolved.record;
+    const csrfToken = randomOpaqueValue();
+    record.csrfSecretDigest = await sha256Hex(csrfToken);
+    record.revision += 1;
+    await this.persist(record);
+    return { csrfToken };
   }
 
   async revokeSession(cookieValue: string, reason: string): Promise<void> {

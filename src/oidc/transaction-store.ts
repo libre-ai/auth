@@ -2,6 +2,7 @@ export interface OidcTransactionRecord {
   cookieDigest: string;
   expiresAtMs: number;
   nonce: string;
+  returnPath: string;
   state: string;
   verifier: string;
 }

@@ -2,6 +2,12 @@ export { type Clock, systemClock } from "./clock";
 export { type CsrfCheckInput, type CsrfCheckResult, verifyCsrf } from "./csrf/verify";
 export { DevIssuer } from "./dev-issuer/issuer";
 export {
+  AuthHttpBoundary,
+  type AuthHttpBoundaryOptions,
+  OIDC_TRANSACTION_COOKIE,
+  SESSION_COOKIE,
+} from "./http/handlers";
+export {
   InMemoryMembershipDirectory,
   type MembershipDirectory,
   type MembershipFacts,
