@@ -1,4 +1,29 @@
 export { type Clock, systemClock } from "./clock";
+export { type CsrfCheckInput, type CsrfCheckResult, verifyCsrf } from "./csrf/verify";
+export { DevIssuer } from "./dev-issuer/issuer";
+export {
+  InMemoryMembershipDirectory,
+  type MembershipDirectory,
+  type MembershipFacts,
+} from "./membership/directory";
+export {
+  type IdTokenVerification,
+  type IdTokenVerificationInput,
+  type VerifiedIdTokenClaims,
+  verifyIdToken,
+} from "./oidc/jws";
+export {
+  type CompletedLogin,
+  OIDC_TRANSACTION_LIFETIME_MS,
+  OidcLoginFlow,
+  type StartedLogin,
+  type TokenEndpoint,
+} from "./oidc/transaction";
+export {
+  InMemoryOidcTransactionStore,
+  type OidcTransactionRecord,
+  type OidcTransactionStore,
+} from "./oidc/transaction-store";
 export {
   ABSOLUTE_LIFETIME_MS,
   type CreatedSession,
