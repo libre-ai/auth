@@ -13,10 +13,15 @@
   "scripts": {
     "check:bun": "bun ../../tools/quality/check-bun-minimum.ts",
     "pretest": "bun run check:bun",
-    "test": "bun test"
+    "test": "bun test",
+    "pree2e": "bun run check:bun",
+    "e2e": "playwright test --config playwright.config.ts"
   },
   "dependencies": {
     "@libre-ai/contracts": "workspace:*",
     "@libre-ai/web-platform": "workspace:*"
+  },
+  "devDependencies": {
+    "@playwright/test": "catalog:testing"
   }
 }
