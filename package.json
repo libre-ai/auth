@@ -1,0 +1,22 @@
+{
+  "name": "@libre-ai/auth-web",
+  "version": "0.1.0",
+  "private": true,
+  "license": "EUPL-1.2",
+  "type": "module",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check:bun": "bun ../../tools/quality/check-bun-minimum.ts",
+    "pretest": "bun run check:bun",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@libre-ai/contracts": "workspace:*",
+    "@libre-ai/web-platform": "workspace:*"
+  }
+}
