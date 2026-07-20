@@ -1,9 +1,27 @@
 {
   "name": "@libre-ai/auth-web",
   "version": "0.1.0",
+  "description": "Provider-neutral OIDC, opaque browser sessions and Biscuit authorization for Libre AI applications (layer 4).",
   "private": true,
   "license": "EUPL-1.2",
   "type": "module",
+  "keywords": [
+    "libre-ai",
+    "auth",
+    "oidc",
+    "biscuit",
+    "session",
+    "csrf"
+  ],
+  "homepage": "https://libre-ai.fr",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/libre-ai/libre-ai.git",
+    "directory": "packages/auth-web"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "bun": ">=1.4.0"
   },
