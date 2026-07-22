@@ -50,7 +50,10 @@ adapter is the WP-G2-D01 tenant-isolated data platform. See
 
 ## Publication status
 
-Prepared for satellite publication (`publishConfig.access=public`) but **not yet
-published**: `private` stays set until the owner reserves the npm `@libre-ai`
-scope and authorizes the release (LEXICON §7.4, owner-gated external action).
-Until then, consume it as a workspace dependency inside the monorepo.
+**Publish-ready** (`publishConfig.access=public`): the npm `@libre-ai` scope is
+reserved (owner, 2026-07-22) and the `private` guard is lifted; publication is
+the owner-run `Release satellites` workflow (LEXICON §7.4 — the release itself
+stays an owner-gated external action; see
+`docs/transformation/WAVE1-PUBLICATION-RUNBOOK.md`). **Bun-first package:** it
+ships TypeScript source (no dist build) — consumers need a TS-aware toolchain
+(bun natively; vite/esbuild-based bundlers otherwise).
