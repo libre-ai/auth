@@ -18,8 +18,8 @@ import { InMemoryOidcTransactionStore } from "../src/oidc/transaction-store";
 import { SessionService } from "../src/session/lifecycle";
 import { InMemorySessionStore } from "../src/session/store";
 
-const HOST = Bun.env["HOST"] ?? "127.0.0.1";
-const PORT = Number(Bun.env["PORT"] ?? "4187");
+const HOST = Bun.env.HOST ?? "127.0.0.1";
+const PORT = Number(Bun.env.PORT ?? "4187");
 const ORIGIN = `https://${HOST}:${PORT}`;
 const SUBJECT = "dev-user-1";
 

@@ -48,7 +48,7 @@ test("full PKCE login lands on the stored return path with a Strict opaque sessi
     return { body: (await response.json()) as Record<string, unknown>, status: response.status };
   });
   expect(projection.status).toBe(200);
-  expect(projection.body["userId"]).toBe(`usr_${"b".repeat(16)}`);
+  expect(projection.body.userId).toBe(`usr_${"b".repeat(16)}`);
   expect(Object.keys(projection.body).sort()).toEqual([
     "absoluteExpiresAt",
     "idleExpiresAt",

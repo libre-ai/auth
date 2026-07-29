@@ -190,7 +190,7 @@ async function readReturnPath(request: Request): Promise<string | null> {
     if (typeof body !== "object" || body === null || Array.isArray(body)) {
       return null;
     }
-    const returnPath = (body as Record<string, unknown>)["returnPath"];
+    const returnPath = (body as Record<string, unknown>).returnPath;
     if (
       typeof returnPath !== "string" ||
       returnPath.length > 512 ||

@@ -212,7 +212,7 @@ describe("GET /v1/auth/session", () => {
       "tenantId",
       "userId",
     ]);
-    expect(body["userId"]).toBe(`usr_${"b".repeat(16)}`);
+    expect(body.userId).toBe(`usr_${"b".repeat(16)}`);
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain(sessionCookie);
     expect(serialized).not.toContain("Digest");

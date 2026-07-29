@@ -44,11 +44,11 @@ export async function verifyIdToken(input: IdTokenVerificationInput): Promise<Id
     return REFUSED;
   }
 
-  const algorithm = header["alg"];
+  const algorithm = header.alg;
   if (typeof algorithm !== "string" || !isAllowedAlgorithm(algorithm)) {
     return REFUSED;
   }
-  const keyId = header["kid"];
+  const keyId = header.kid;
   if (typeof keyId !== "string" || keyId.length === 0) {
     return REFUSED;
   }
@@ -71,12 +71,12 @@ export async function verifyIdToken(input: IdTokenVerificationInput): Promise<Id
     return REFUSED;
   }
 
-  const issuer = payload["iss"];
-  const subject = payload["sub"];
-  const audience = payload["aud"];
-  const nonce = payload["nonce"];
-  const expiresAt = payload["exp"];
-  const issuedAt = payload["iat"];
+  const issuer = payload.iss;
+  const subject = payload.sub;
+  const audience = payload.aud;
+  const nonce = payload.nonce;
+  const expiresAt = payload.exp;
+  const issuedAt = payload.iat;
   if (
     issuer !== input.expectedIssuer ||
     typeof subject !== "string" ||
