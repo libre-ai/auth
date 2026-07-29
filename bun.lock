@@ -4,18 +4,20 @@
   "workspaces": {
     "": {
       "name": "@libre-ai/auth-web",
-      "dependencies": {
-        "@libre-ai/contracts": "github:libre-ai/sdk-ts#da9d510cce0c28283837bfb6c9efe82641cbe083",
-        "@libre-ai/web-platform": "github:libre-ai/web-platform#a0754b69b4205e31a0c560f9729bd8d2d8556357",
-      },
       "devDependencies": {
         "@biomejs/biome": "2.5.3",
+        "@libre-ai/contracts": "github:libre-ai/sdk-ts#da9d510cce0c28283837bfb6c9efe82641cbe083",
         "@libre-ai/governance": "github:libre-ai/governance#9511c4087f284d0242fc4a202b2f1452228c16c3",
+        "@libre-ai/web-platform": "github:libre-ai/web-platform#a0754b69b4205e31a0c560f9729bd8d2d8556357",
         "@playwright/test": "1.61.1",
         "@types/bun": "1.3.14",
         "@types/react": "19.2.17",
         "@types/react-dom": "19.2.3",
         "typescript": "7.0.2",
+      },
+      "peerDependencies": {
+        "@libre-ai/contracts": "github:libre-ai/sdk-ts#da9d510cce0c28283837bfb6c9efe82641cbe083",
+        "@libre-ai/web-platform": "github:libre-ai/web-platform#a0754b69b4205e31a0c560f9729bd8d2d8556357",
       },
     },
   },
