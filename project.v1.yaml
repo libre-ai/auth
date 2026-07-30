@@ -1,0 +1,55 @@
+# Fiche d'état du projet — autorité de l'état depuis ADR-0020 (design §6.2).
+# La section statut du README est générée depuis cette fiche (sentinelles).
+schema_version: libre-ai.project.v1
+project: auth
+repository: libre-ai/auth
+kind: satellite
+layer: couche-4
+statement:
+  for: "les projets de la constellation Libre AI"
+  who_faces: "le coût et la dérive de machineries recopiées d'un repo à l'autre"
+  enables: "authentifier des utilisateurs sans réinventer la sécurité de session"
+  producing:
+    - "des sessions sûres et testées, prêtes pour les applications"
+  without_depending_on:
+    - "aucun service tiers, aucune copie non vérifiée — consommation épinglée et gates de dérive"
+summary: "Authentification web : sessions opaques HttpOnly, CSRF, intégration Biscuit."
+current_situation: >-
+  Née verte en γ 3.4 ; son pattern peerDependencies pour briques internes est devenu la convention de flotte.
+scope:
+  - "Authentification web : sessions opaques HttpOnly, CSRF, intégration Biscuit."
+non_goals:
+  - "aucune seconde implémentation durable de ce domaine ailleurs dans la constellation"
+dependencies:
+  - on: libre-ai/sdk-ts
+    why: "types de contrats TypeScript (peer)"
+    pinned: "épinglée par SHA (ou release pour les outils) là où elle est consommée"
+  - on: libre-ai/web-platform
+    why: "socle applicatif (peer)"
+    pinned: "épinglée par SHA (ou release pour les outils) là où elle est consommée"
+  - on: libre-ai/governance
+    why: "gabarit de flotte et gates de qualité"
+    pinned: "épinglée par SHA (ou release pour les outils) là où elle est consommée"
+maturity: usable
+confidence: medium
+exposure: spec-published
+freshness:
+  last_verified_on: "2026-07-30"
+scope_stability: stable
+benchmark:
+  none: "n/a (shared brick, no external parity target)"
+phases:
+  - id: service
+    title: En service dans la constellation
+    exit_criteria:
+      - id: consumed-pinned
+        text: "La brique est consommée via peerDependencies (pattern fixé flotte après la repro bun de dédup same-pin)."
+        weight: 1
+        status: accepted
+        evidence:
+          date: "2026-07-29"
+          reference: "gate-acceptance-log 2026-07-29 (ligne 3.4), PRs hub #279-#283"
+      - id: compat-policy
+        text: "L'API est couverte par une politique de compatibilité déclarée et un versionnage de rupture outillé."
+        weight: 1
+        status: pending

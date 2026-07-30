@@ -67,3 +67,19 @@ compatible copyleft licence (art. 5's listed set: GPL/AGPL/MPL…) is only an
 option when the derivative combines this code with a work already under that
 licence. Purely internal use imposes no such obligation. The bundled `LICENSE`
 governs.
+
+## État du projet
+
+<!-- libre-ai:project-status:begin -->
+<!-- Section générée depuis project.v1.yaml — ne pas éditer à la main. -->
+
+- Situation actuelle : Née verte en γ 3.4 ; son pattern peerDependencies pour briques internes est devenu la convention de flotte.
+- Maturité : usable
+- Exposition : spec-published
+- Confiance : medium
+- Preuves vérifiées le : 2026-07-30
+- Avancement : 50 % du périmètre actuellement déclaré
+
+<!-- libre-ai:project-status:end -->
+
+La fiche [`project.v1.yaml`](./project.v1.yaml) est l'autorité de l'état du projet ; cette section en est générée et le gate de flotte échoue si elles divergent.
