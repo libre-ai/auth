@@ -7,7 +7,8 @@ import { InMemoryMembershipDirectory } from "../membership/directory";
 import { OidcLoginFlow } from "../oidc/transaction";
 import { InMemoryOidcTransactionStore } from "../oidc/transaction-store";
 import { IDLE_TIMEOUT_MS, SessionService } from "../session/lifecycle";
-import { InMemorySessionStore } from "../session/store";
+import type { BrowserSessionRecord } from "../session/record";
+import { InMemorySessionStore, type SessionSaveOutcome, type SessionStore } from "../session/store";
 import { AuthHttpBoundary } from "./handlers";
 
 const registry = await loadCanonicalContractRegistry();
@@ -30,12 +31,51 @@ function fixedClock(start: string): Clock & { advance(ms: number): void } {
   };
 }
 
+// A durable adapter on which the revocation write always loses the race: a
+// concurrent request slid the idle window and moved the revision between this
+// caller's read and its write. Every other write still lands, so the login
+// flow behaves normally and the test isolates the revocation outcome.
+class LostRevocationSessionStore implements SessionStore {
+  private readonly records = new Map<string, BrowserSessionRecord>();
+
+  findByDigest(sessionDigest: string): Promise<BrowserSessionRecord | null> {
+    for (const record of this.records.values()) {
+      if (record.sessionDigest === sessionDigest) {
+        return Promise.resolve(structuredClone(record));
+      }
+    }
+    return Promise.resolve(null);
+  }
+
+  save(
+    record: BrowserSessionRecord,
+    _expectedRevision: number | null,
+  ): Promise<SessionSaveOutcome> {
+    if (record.status === "revoked") {
+      return Promise.resolve("revision_conflict");
+    }
+    this.records.set(record.id, structuredClone(record));
+    return Promise.resolve("stored");
+  }
+
+  removeByIds(ids: readonly string[]): Promise<void> {
+    for (const id of ids) {
+      this.records.delete(id);
+    }
+    return Promise.resolve();
+  }
+
+  list(): Promise<BrowserSessionRecord[]> {
+    return Promise.resolve([...this.records.values()].map((record) => structuredClone(record)));
+  }
+}
+
 let clock: ReturnType<typeof fixedClock>;
 let issuer: DevIssuer;
 let boundary: AuthHttpBoundary;
 let sessions: SessionService;
 
-beforeEach(async () => {
+async function buildBoundary(store: SessionStore): Promise<void> {
   clock = fixedClock("2026-07-19T10:00:00.000Z");
   issuer = await DevIssuer.create({ clock, issuer: ISSUER });
   const directory = new InMemoryMembershipDirectory();
@@ -48,7 +88,7 @@ beforeEach(async () => {
   sessions = await SessionService.create({
     clock,
     cookieDigestKey: new Uint8Array(32).fill(7),
-    store: new InMemorySessionStore(),
+    store,
   });
   boundary = new AuthHttpBoundary({
     allowedOrigin: ORIGIN,
@@ -64,6 +104,10 @@ beforeEach(async () => {
     }),
     sessions,
   });
+}
+
+beforeEach(async () => {
+  await buildBoundary(new InMemorySessionStore());
 });
 
 function loginRequest(overrides: { body?: unknown; headers?: Record<string, string> } = {}) {
@@ -300,6 +344,26 @@ describe("DELETE /v1/auth/session", () => {
       "auth.session_revision_mismatch",
     );
 
+    const still = await boundary.handleGetSession(
+      new Request(`${ORIGIN}/v1/auth/session`, {
+        headers: { Cookie: `__Host-libre_ai_session=${sessionCookie}` },
+      }),
+    );
+    expect(still.status).toBe(200);
+  });
+
+  test("a revocation whose write is lost refuses instead of answering 204", async () => {
+    await buildBoundary(new LostRevocationSessionStore());
+    const { sessionCookie } = await login();
+    const { csrfToken } = await sessions.refreshCsrfSecret(sessionCookie);
+    const current = await sessions.resolveSession(sessionCookie);
+    if (!current.ok) throw new Error("expected active session");
+
+    const response = await deleteRequest(sessionCookie, csrfToken, current.record.revision);
+
+    // 204 would tell the browser the session is gone while it still
+    // authenticates every subsequent request.
+    await expectProblem(response, 412, "auth.session_revision_mismatch");
     const still = await boundary.handleGetSession(
       new Request(`${ORIGIN}/v1/auth/session`, {
         headers: { Cookie: `__Host-libre_ai_session=${sessionCookie}` },

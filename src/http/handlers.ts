@@ -139,7 +139,17 @@ export class AuthHttpBoundary {
       return problemResponse(412, "auth.session_revision_mismatch", requestId);
     }
 
-    await this.options.sessions.revokeSession(cookieValue, "auth.session_revoked");
+    // The If-Match precondition was checked against a read; the store checks
+    // it again when the revocation actually lands. If it no longer holds, the
+    // session is still live and the client must re-read and retry — answering
+    // 204 here would clear the cookie while the record keeps authenticating.
+    const revocation = await this.options.sessions.revokeSession(
+      cookieValue,
+      "auth.session_revoked",
+    );
+    if (!revocation.ok) {
+      return problemResponse(412, revocation.code, requestId);
+    }
     const response = new Response(null, { status: 204 });
     response.headers.append(
       "Set-Cookie",

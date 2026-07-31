@@ -43,10 +43,32 @@ const boundary = new AuthHttpBoundary({
 // The exact request/response contracts are contracts/openapi/auth.v1.yaml.
 ```
 
+## Storage port
+
 Storage is a port: the in-memory store is deterministic for tests; the durable
 adapter is the WP-G2-D01 tenant-isolated data platform. See
 `contracts/openapi/auth.v1.yaml` for the wire contract and
 `docs/specifications/IDENTITY-AUTHORIZATION.md` for the locked identity model.
+
+`SessionStore.save()` is a **compare-and-swap** write, not an upsert:
+
+```ts
+save(record: BrowserSessionRecord, expectedRevision: number | null): Promise<SessionSaveOutcome>;
+// SessionSaveOutcome = "stored" | "revision_conflict"
+```
+
+`expectedRevision` is the revision the caller read: `null` requires the record
+to be absent (creation), a number requires the stored record to still sit at
+exactly that revision. An adapter **must** evaluate the precondition and apply
+the write as a single atomic operation on the durable side — `UPDATE … WHERE
+id = $1 AND revision = $2`, a Lua script, or `WATCH`/`MULTI` — and return
+`"revision_conflict"` without writing when it does not hold.
+
+This is load-bearing for revocation, not an optimisation. Resolving a session
+slides the idle window, so **every authenticated request is a writer**: an
+adapter that reads and then writes unconditionally lets an ordinary in-flight
+request overwrite a logout decided a few milliseconds earlier, and the session
+keeps authenticating after the client was told it was closed.
 
 ## Publication status
 
