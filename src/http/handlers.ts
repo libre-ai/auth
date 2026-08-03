@@ -3,7 +3,7 @@ import { secureResponse } from "@libre-ai/web-platform";
 import { verifyCsrf } from "../csrf/verify";
 import { type OidcLoginFlow, RETURN_PATH_PATTERN } from "../oidc/transaction";
 import { randomOpaqueValue } from "../session/digest";
-import type { SessionService } from "../session/lifecycle";
+import type { CreatedSession, SessionService } from "../session/lifecycle";
 
 export const OIDC_TRANSACTION_COOKIE = "__Host-libre_ai_oidc";
 export const SESSION_COOKIE = "__Host-libre_ai_session";
@@ -70,7 +70,17 @@ export class AuthHttpBoundary {
       return problemResponse(400, completed.code, requestId);
     }
 
-    const created = await this.options.sessions.createSession(completed.facts);
+    // `createSession` fails closed — an unstorable record must not yield a
+    // cookie that authenticates nothing — and this is the only endpoint that
+    // calls it. The browser is owed a response either way, and the failure is
+    // a server fault rather than an auth refusal, so it maps onto the
+    // platform's generic code instead of extending the auth refusal table.
+    let created: CreatedSession;
+    try {
+      created = await this.options.sessions.createSession(completed.facts);
+    } catch {
+      return problemResponse(500, "web.internal_error", requestId);
+    }
     const response = new Response(null, {
       headers: { Location: completed.returnPath },
       status: 303,
@@ -139,17 +149,12 @@ export class AuthHttpBoundary {
       return problemResponse(412, "auth.session_revision_mismatch", requestId);
     }
 
-    // The If-Match precondition was checked against a read; the store checks
-    // it again when the revocation actually lands. If it no longer holds, the
-    // session is still live and the client must re-read and retry — answering
-    // 204 here would clear the cookie while the record keeps authenticating.
-    const revocation = await this.options.sessions.revokeSession(
-      cookieValue,
-      "auth.session_revoked",
-    );
-    if (!revocation.ok) {
-      return problemResponse(412, revocation.code, requestId);
-    }
+    // The 412 above is the client's precondition, and the only one on this
+    // path. The revocation itself carries no revision precondition — it is
+    // monotone and terminal, so it lands whatever concurrent writers did, and
+    // 204 here never means "cleared your cookie for a logout that did not
+    // happen".
+    await this.options.sessions.revokeSession(cookieValue, "auth.session_revoked");
     const response = new Response(null, { status: 204 });
     response.headers.append(
       "Set-Cookie",

@@ -35,7 +35,6 @@ export {
   type CreatedSession,
   IDLE_TIMEOUT_MS,
   REFUSAL_RETENTION_MS,
-  type RevocationOutcome,
   type SessionResolution,
   SessionService,
 } from "./session/lifecycle";
@@ -47,6 +46,7 @@ export type {
 } from "./session/record";
 export {
   InMemorySessionStore,
+  type SessionRevokeOutcome,
   type SessionSaveOutcome,
   type SessionStore,
 } from "./session/store";

@@ -9,11 +9,13 @@ export const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 export const ABSOLUTE_LIFETIME_MS = 12 * 60 * 60 * 1000;
 export const REFUSAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 
-// A conflict means another writer moved the record between our read and our
-// write, so the next attempt starts from the state that writer left behind.
-// Contention on a single session row is bounded by the number of concurrent
-// requests carrying the same cookie; a handful of attempts absorbs the honest
-// cases without turning a contended row into an unbounded retry loop.
+// Budget for the compare-and-swap writes only — revocation is not one of them
+// (see `revokeSession`). A conflict means another writer moved the record
+// between our read and our write, so the next attempt starts from the state
+// that writer left behind. Contention on a single session row is bounded by
+// the number of concurrent requests carrying the same cookie; a handful of
+// attempts absorbs the honest cases without turning a contended row into an
+// unbounded retry loop.
 const MAX_WRITE_ATTEMPTS = 3;
 
 export interface CreatedSession {
@@ -25,10 +27,6 @@ export interface CreatedSession {
 export type SessionResolution =
   | { ok: true; record: BrowserSessionRecord }
   | { ok: false; code: "auth.session_missing" | "auth.session_expired" | "auth.session_revoked" };
-
-export type RevocationOutcome =
-  | { ok: true }
-  | { ok: false; code: "auth.session_revision_mismatch" };
 
 interface SessionServiceOptions {
   clock: Clock;
@@ -102,6 +100,16 @@ export class SessionService {
         }
         return { code: "auth.session_expired", ok: false };
       }
+      if (attempt > MAX_WRITE_ATTEMPTS) {
+        // Sustained contention: the slide is abandoned, which only shortens
+        // the idle window. The read is never abandoned. Every conflict we
+        // observed was the store telling us another writer moved this record
+        // — and a revocation is exactly that kind of move — so this iteration
+        // re-read and re-ran the refusals above before authenticating.
+        // Authenticating on a read a conflict had already invalidated is the
+        // bypass this whole precondition exists to close.
+        return { ok: true, record: stored };
+      }
       // Sliding the idle window is server telemetry, not a client-locked
       // mutation: bumping the optimistic revision here would make every
       // If-Match precondition stale by construction. The revision is still
@@ -115,13 +123,6 @@ export class SessionService {
       };
       if ((await this.persist(slid, stored.revision)) === "stored") {
         return { ok: true, record: slid };
-      }
-      if (attempt >= MAX_WRITE_ATTEMPTS) {
-        // The slide is best-effort under sustained contention: dropping it
-        // only shortens the idle window. What must never be dropped is the
-        // status check above, which ran against a record read from the store
-        // on this very attempt.
-        return { ok: true, record: stored };
       }
     }
   }
@@ -176,31 +177,34 @@ export class SessionService {
     return { csrfToken };
   }
 
-  async revokeSession(cookieValue: string, reason: string): Promise<RevocationOutcome> {
+  // Revocation is the one write that is never a compare-and-swap. It is
+  // monotone and terminal, so no concurrent writer can make it wrong, and
+  // making it lose a race would mean a user who cannot log out while other
+  // requests keep touching the session — the most critical write refused
+  // under exactly the load that makes it urgent. The store applies it
+  // unconditionally (bar the terminal state) and bumps the revision itself,
+  // which is what makes every compare-and-swap issued before it conflict
+  // instead of writing the pre-revocation state back.
+  async revokeSession(cookieValue: string, reason: string): Promise<void> {
     const sessionDigest = await hmacSha256Hex(this.digestKey, cookieValue);
-    for (let attempt = 1; ; attempt += 1) {
-      const stored = await this.store.findByDigest(sessionDigest);
-      // Nothing left for this cookie to authenticate: revocation is
-      // idempotent, so this is a success, not a refusal.
-      if (stored === null || stored.status === "revoked") {
-        return { ok: true };
-      }
-      const revoked: BrowserSessionRecord = {
-        ...stored,
-        revision: stored.revision + 1,
-        revocationReason: reason,
-        revokedAt: this.clock.now().toISOString(),
-        status: "revoked",
-      };
-      if ((await this.persist(revoked, stored.revision)) === "stored") {
-        return { ok: true };
-      }
-      if (attempt >= MAX_WRITE_ATTEMPTS) {
-        // The one outcome that must never be reported as success: the caller
-        // would be told the session is gone while it still authenticates.
-        return { code: "auth.session_revision_mismatch", ok: false };
-      }
+    const stored = await this.store.findByDigest(sessionDigest);
+    // Nothing left for this cookie to authenticate: revocation is idempotent.
+    if (stored === null || stored.status === "revoked") {
+      return;
     }
+    const revokedAt = this.clock.now().toISOString();
+    // The store owns this write's revision, so the contract check runs on the
+    // projection of what we ask it to write: a revocation reason that would
+    // make the record violate `browser-session.v1` must not reach the durable
+    // side just because this write skips `persist()`.
+    this.assertContractConform({
+      ...stored,
+      revision: stored.revision + 1,
+      revocationReason: reason,
+      revokedAt,
+      status: "revoked",
+    });
+    await this.store.revoke(stored.id, { revocationReason: reason, revokedAt });
   }
 
   async pruneExpired(): Promise<void> {
@@ -236,14 +240,18 @@ export class SessionService {
     return new Date(record.absoluteExpiresAt).getTime();
   }
 
-  private async persist(
-    record: BrowserSessionRecord,
-    expectedRevision: number | null,
-  ): Promise<SessionSaveOutcome> {
+  private assertContractConform(record: BrowserSessionRecord): void {
     const validation = this.registry.validate("browser-session.v1.schema.json", record);
     if (!validation.ok) {
       throw new Error("auth.session_facts_invalid");
     }
+  }
+
+  private async persist(
+    record: BrowserSessionRecord,
+    expectedRevision: number | null,
+  ): Promise<SessionSaveOutcome> {
+    this.assertContractConform(record);
     return await this.store.save(record, expectedRevision);
   }
 }

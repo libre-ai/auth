@@ -8,7 +8,12 @@ import { OidcLoginFlow } from "../oidc/transaction";
 import { InMemoryOidcTransactionStore } from "../oidc/transaction-store";
 import { IDLE_TIMEOUT_MS, SessionService } from "../session/lifecycle";
 import type { BrowserSessionRecord } from "../session/record";
-import { InMemorySessionStore, type SessionSaveOutcome, type SessionStore } from "../session/store";
+import {
+  InMemorySessionStore,
+  type SessionRevokeOutcome,
+  type SessionSaveOutcome,
+  type SessionStore,
+} from "../session/store";
 import { AuthHttpBoundary } from "./handlers";
 
 const registry = await loadCanonicalContractRegistry();
@@ -31,12 +36,19 @@ function fixedClock(start: string): Clock & { advance(ms: number): void } {
   };
 }
 
-// A durable adapter on which the revocation write always loses the race: a
-// concurrent request slid the idle window and moved the revision between this
-// caller's read and its write. Every other write still lands, so the login
-// flow behaves normally and the test isolates the revocation outcome.
-class LostRevocationSessionStore implements SessionStore {
+// A durable adapter under a revision storm: once contention starts, a
+// competing writer that moves the revision — another tab refreshing its CSRF
+// token, say — always gets there first, so every write carrying a new
+// revision loses. The idle-window slide does not move the revision and still
+// lands, which keeps the client's `If-Match` precondition holding: the
+// revocation is the only write left to starve.
+class ContendedRevisionSessionStore implements SessionStore {
   private readonly records = new Map<string, BrowserSessionRecord>();
+  private contending = false;
+
+  startContending(): void {
+    this.contending = true;
+  }
 
   findByDigest(sessionDigest: string): Promise<BrowserSessionRecord | null> {
     for (const record of this.records.values()) {
@@ -47,15 +59,44 @@ class LostRevocationSessionStore implements SessionStore {
     return Promise.resolve(null);
   }
 
-  save(
-    record: BrowserSessionRecord,
-    _expectedRevision: number | null,
-  ): Promise<SessionSaveOutcome> {
-    if (record.status === "revoked") {
+  save(record: BrowserSessionRecord, expectedRevision: number | null): Promise<SessionSaveOutcome> {
+    const current = this.records.get(record.id);
+    const stale =
+      expectedRevision === null
+        ? current !== undefined
+        : current === undefined || current.revision !== expectedRevision;
+    if (stale) {
+      return Promise.resolve("revision_conflict");
+    }
+    if (this.contending && current !== undefined && record.revision !== current.revision) {
+      this.records.set(record.id, { ...current, revision: current.revision + 1 });
       return Promise.resolve("revision_conflict");
     }
     this.records.set(record.id, structuredClone(record));
     return Promise.resolve("stored");
+  }
+
+  // Carries no revision precondition, so the revision storm above cannot
+  // starve it.
+  revoke(
+    id: string,
+    revocation: { revocationReason: string; revokedAt: string },
+  ): Promise<SessionRevokeOutcome> {
+    const current = this.records.get(id);
+    if (current === undefined) {
+      return Promise.resolve("absent");
+    }
+    if (current.status === "revoked") {
+      return Promise.resolve("already_revoked");
+    }
+    this.records.set(id, {
+      ...current,
+      revision: current.revision + 1,
+      revocationReason: revocation.revocationReason,
+      revokedAt: revocation.revokedAt,
+      status: "revoked",
+    });
+    return Promise.resolve("revoked");
   }
 
   removeByIds(ids: readonly string[]): Promise<void> {
@@ -67,6 +108,32 @@ class LostRevocationSessionStore implements SessionStore {
 
   list(): Promise<BrowserSessionRecord[]> {
     return Promise.resolve([...this.records.values()].map((record) => structuredClone(record)));
+  }
+}
+
+// A durable adapter on which no session can be created: the absence
+// precondition never holds. Whatever the cause — an id already taken, an
+// adapter answering `revision_conflict` unconditionally — the service fails
+// closed, and the boundary still owes the browser a response.
+class UnwritableSessionStore implements SessionStore {
+  findByDigest(): Promise<BrowserSessionRecord | null> {
+    return Promise.resolve(null);
+  }
+
+  save(): Promise<SessionSaveOutcome> {
+    return Promise.resolve("revision_conflict");
+  }
+
+  revoke(): Promise<SessionRevokeOutcome> {
+    return Promise.resolve("absent");
+  }
+
+  removeByIds(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  list(): Promise<BrowserSessionRecord[]> {
+    return Promise.resolve([]);
   }
 }
 
@@ -134,7 +201,7 @@ function cookieValueOf(setCookie: string): string {
   return (setCookie.split(";")[0] ?? "").split("=")[1] ?? "";
 }
 
-async function login(): Promise<{ sessionCookie: string; response: Response }> {
+async function runLoginToCallback(): Promise<Response> {
   const startResponse = await boundary.handleLogin(loginRequest());
   const { authorizationUrl } = (await startResponse.json()) as { authorizationUrl: string };
   const transactionCookie = cookieValueOf(cookieOf(startResponse, "__Host-libre_ai_oidc"));
@@ -145,12 +212,16 @@ async function login(): Promise<{ sessionCookie: string; response: Response }> {
     nonce: url.searchParams.get("nonce") ?? "",
     subject: SUBJECT,
   });
-  const callback = await boundary.handleCallback(
+  return await boundary.handleCallback(
     new Request(
       `${ORIGIN}/v1/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(url.searchParams.get("state") ?? "")}`,
       { headers: { Cookie: `__Host-libre_ai_oidc=${transactionCookie}` } },
     ),
   );
+}
+
+async function login(): Promise<{ sessionCookie: string; response: Response }> {
+  const callback = await runLoginToCallback();
   return {
     response: callback,
     sessionCookie: cookieValueOf(cookieOf(callback, "__Host-libre_ai_session")),
@@ -235,6 +306,19 @@ describe("GET /v1/auth/callback", () => {
       }),
     );
     await expectProblem(shortState, 400, "auth.oidc_state_invalid");
+  });
+
+  test("a session that cannot be stored answers a problem instead of throwing", async () => {
+    await buildBoundary(new UnwritableSessionStore());
+
+    const response = await runLoginToCallback();
+
+    // The identity check passed and the store failed: a server fault, not an
+    // auth refusal, so it reuses the platform's generic code rather than
+    // extending the auth refusal table. What must not happen is an exception
+    // escaping the boundary instead of a Response.
+    await expectProblem(response, 500, "web.internal_error");
+    expect(response.headers.getSetCookie()).toHaveLength(0);
   });
 });
 
@@ -352,23 +436,27 @@ describe("DELETE /v1/auth/session", () => {
     expect(still.status).toBe(200);
   });
 
-  test("a revocation whose write is lost refuses instead of answering 204", async () => {
-    await buildBoundary(new LostRevocationSessionStore());
+  test("logout still lands when concurrent writers keep moving the revision", async () => {
+    const store = new ContendedRevisionSessionStore();
+    await buildBoundary(store);
     const { sessionCookie } = await login();
     const { csrfToken } = await sessions.refreshCsrfSecret(sessionCookie);
     const current = await sessions.resolveSession(sessionCookie);
     if (!current.ok) throw new Error("expected active session");
 
+    store.startContending();
     const response = await deleteRequest(sessionCookie, csrfToken, current.record.revision);
 
-    // 204 would tell the browser the session is gone while it still
-    // authenticates every subsequent request.
-    await expectProblem(response, 412, "auth.session_revision_mismatch");
-    const still = await boundary.handleGetSession(
+    // Refusing the revocation here means "you cannot log out": the client's
+    // precondition held, and a revocation is monotone and terminal, so no
+    // concurrent writer can make it wrong. It must land.
+    expect(response.status).toBe(204);
+    expect(cookieOf(response, "__Host-libre_ai_session")).toContain("Max-Age=0");
+    const after = await boundary.handleGetSession(
       new Request(`${ORIGIN}/v1/auth/session`, {
         headers: { Cookie: `__Host-libre_ai_session=${sessionCookie}` },
       }),
     );
-    expect(still.status).toBe(200);
+    await expectProblem(after, 401, "auth.session_revoked");
   });
 });
