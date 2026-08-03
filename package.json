@@ -1,6 +1,6 @@
 {
   "name": "@libre-ai/auth-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Provider-neutral OIDC, opaque browser sessions and Biscuit authorization for Libre AI applications (layer 4).",
   "license": "EUPL-1.2",
   "type": "module",
