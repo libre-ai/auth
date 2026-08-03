@@ -5,7 +5,11 @@ import type { Clock } from "../clock";
 import { DevIssuer } from "../dev-issuer/issuer";
 import { InMemoryMembershipDirectory } from "../membership/directory";
 import { OidcLoginFlow } from "../oidc/transaction";
-import { InMemoryOidcTransactionStore } from "../oidc/transaction-store";
+import {
+  InMemoryOidcTransactionStore,
+  type OidcTransactionRecord,
+  type OidcTransactionStore,
+} from "../oidc/transaction-store";
 import { IDLE_TIMEOUT_MS, SessionService } from "../session/lifecycle";
 import type { BrowserSessionRecord } from "../session/record";
 import {
@@ -137,12 +141,53 @@ class UnwritableSessionStore implements SessionStore {
   }
 }
 
+// Every adapter behind the boundary can fail for reasons none of these
+// handlers control: a store round trip, a token endpoint. The boundary is the
+// outermost frame of a browser request, so the failure owes the browser a
+// Response — never a thrown error propagating past the handler.
+const UNREACHABLE = (): Promise<never> => Promise.reject(new Error("adapter unreachable"));
+
+class UnreachableSessionStore implements SessionStore {
+  findByDigest(): Promise<BrowserSessionRecord | null> {
+    return UNREACHABLE();
+  }
+
+  save(): Promise<SessionSaveOutcome> {
+    return UNREACHABLE();
+  }
+
+  revoke(): Promise<SessionRevokeOutcome> {
+    return UNREACHABLE();
+  }
+
+  removeByIds(): Promise<void> {
+    return UNREACHABLE();
+  }
+
+  list(): Promise<BrowserSessionRecord[]> {
+    return UNREACHABLE();
+  }
+}
+
+class UnreachableTransactionStore implements OidcTransactionStore {
+  save(): Promise<void> {
+    return UNREACHABLE();
+  }
+
+  consumeByDigest(): Promise<OidcTransactionRecord | null> {
+    return UNREACHABLE();
+  }
+}
+
 let clock: ReturnType<typeof fixedClock>;
 let issuer: DevIssuer;
 let boundary: AuthHttpBoundary;
 let sessions: SessionService;
 
-async function buildBoundary(store: SessionStore): Promise<void> {
+async function buildBoundary(
+  store: SessionStore,
+  transactions: OidcTransactionStore = new InMemoryOidcTransactionStore(),
+): Promise<void> {
   clock = fixedClock("2026-07-19T10:00:00.000Z");
   issuer = await DevIssuer.create({ clock, issuer: ISSUER });
   const directory = new InMemoryMembershipDirectory();
@@ -165,7 +210,7 @@ async function buildBoundary(store: SessionStore): Promise<void> {
       directory,
       issuer: ISSUER,
       jwks: () => Promise.resolve(issuer.jwks()),
-      store: new InMemoryOidcTransactionStore(),
+      store: transactions,
       tokenEndpoint: (request) => issuer.exchangeCode(request),
       transactionDigestKey: new Uint8Array(32).fill(9),
     }),
@@ -458,5 +503,52 @@ describe("DELETE /v1/auth/session", () => {
       }),
     );
     await expectProblem(after, 401, "auth.session_revoked");
+  });
+});
+
+describe("adapter failures never escape the boundary", () => {
+  test("every handler answers a problem when its adapter throws", async () => {
+    await buildBoundary(new UnreachableSessionStore(), new UnreachableTransactionStore());
+
+    await expectProblem(await boundary.handleLogin(loginRequest()), 500, "web.internal_error");
+
+    await expectProblem(
+      await boundary.handleCallback(
+        new Request(`${ORIGIN}/v1/auth/callback?code=${"c".repeat(43)}&state=${"s".repeat(43)}`, {
+          headers: { Cookie: `__Host-libre_ai_oidc=${"t".repeat(43)}` },
+        }),
+      ),
+      500,
+      "web.internal_error",
+    );
+
+    await expectProblem(
+      await boundary.handleGetSession(
+        new Request(`${ORIGIN}/v1/auth/session`, {
+          headers: { Cookie: `__Host-libre_ai_session=${"s".repeat(43)}` },
+        }),
+      ),
+      500,
+      "web.internal_error",
+    );
+
+    const logout = await boundary.handleDeleteSession(
+      new Request(`${ORIGIN}/v1/auth/session`, {
+        headers: {
+          Cookie: `__Host-libre_ai_session=${"s".repeat(43)}`,
+          "Idempotency-Key": IDEMPOTENCY,
+          "If-Match": '"0"',
+          Origin: ORIGIN,
+          "Sec-Fetch-Site": "same-origin",
+          "X-CSRF-Token": "t".repeat(43),
+        },
+        method: "DELETE",
+      }),
+    );
+    await expectProblem(logout, 500, "web.internal_error");
+    // A logout that failed must not clear the cookie: telling the browser the
+    // session is closed when the server never closed it is the defect this
+    // branch exists to remove, arrived at from the other side.
+    expect(logout.headers.getSetCookie()).toHaveLength(0);
   });
 });
