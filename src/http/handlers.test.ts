@@ -11,7 +11,7 @@ import {
   type OidcTransactionStore,
 } from "../oidc/transaction-store";
 import { IDLE_TIMEOUT_MS, SessionService } from "../session/lifecycle";
-import type { BrowserSessionRecord } from "../session/record";
+import type { BrowserSessionRecord, SessionRevocationReason } from "../session/record";
 import {
   InMemorySessionStore,
   type SessionRevokeOutcome,
@@ -84,7 +84,7 @@ class ContendedRevisionSessionStore implements SessionStore {
   // starve it.
   revoke(
     id: string,
-    revocation: { revocationReason: string; revokedAt: string },
+    revocation: { revocationReason: SessionRevocationReason; revokedAt: string },
   ): Promise<SessionRevokeOutcome> {
     const current = this.records.get(id);
     if (current === undefined) {

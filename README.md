@@ -59,9 +59,10 @@ save(record: BrowserSessionRecord, expectedRevision: number | null): Promise<Ses
 // SessionSaveOutcome = "stored" | "revision_conflict"
 
 // 2. Terminal, monotone, unconditional.
-revoke(id: string, revocation: { revocationReason: string; revokedAt: string }):
+revoke(id: string, revocation: { revocationReason: SessionRevocationReason; revokedAt: string }):
   Promise<SessionRevokeOutcome>;
 // SessionRevokeOutcome = "revoked" | "already_revoked" | "absent"
+// SessionRevocationReason = `auth.${string}`
 ```
 
 `expectedRevision` is the revision the caller read: `null` requires the record
@@ -102,6 +103,37 @@ UPDATE browser_sessions
  WHERE id = $1 AND status <> 'revoked';
 -- 1 row → "revoked"; 0 rows → "already_revoked" (or "absent")
 ```
+
+Note the columns that statement does **not** touch. `revoke()` writes four and
+reads none of the others, deliberately: it must land on a row the rest of the
+contract no longer accepts — one written before a role left the enumeration, one
+a migration is halfway through. An adapter that re-serialises the whole record
+here, or revalidates it, makes an unrelated stored defect refuse the one write
+that must never be refused, and leaves a session that can be neither
+authenticated nor closed. `revocationReason` arrives already canonicalised by
+`SessionService` and needs no adapter-side check.
+
+`revokeSession(cookieValue, reason)` is the service-side entry, and it adds no
+failure of its own: it canonicalises the reason before reading anything, and
+issues the terminal write unconditionally. `SessionRevocationReason` is
+`` `auth.${string}` `` — the contract's namespace as far as the type system
+carries it, so `revokeSession(cookie, "user_logout")` does not compile — and a
+reason that still misses `^auth\.[a-z0-9_.-]+$` at runtime (a JavaScript caller,
+a widened `string`) is replaced by `CANONICAL_REVOCATION_REASON` rather than
+refused. A refusal there would end a revocation call with the session still
+authenticating, which is the whole defect. Only the adapter can fail, and the
+HTTP boundary answers `500 web.internal_error` when it does — without clearing
+the cookie, so a failed logout is never reported as a successful one.
+
+On the read side the same stored row is treated the other way round, and for
+the same reason. `resolveSession()` validates what it reads against
+`browser-session.v1` on **every** read, including the one it decides on after
+abandoning a contended idle-window slide, and refuses a record the contract no
+longer accepts with `auth.session_missing` — a code already in the locked
+refusal table, disclosing nothing. It refuses rather than revokes: revocation
+is terminal, so revoking on read would turn a repairable data defect, such as a
+fleet migration in flight, into an irreversible mass logout. The record stays
+unusable until it is repaired, and revocable throughout.
 
 **Adapter break, 0.1.0 → 0.2.0.** An out-of-tree store written for 0.1.0 must
 be updated. Note that the two changes fail differently: a `save()` that ignores

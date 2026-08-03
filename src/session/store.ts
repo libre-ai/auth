@@ -1,4 +1,4 @@
-import type { BrowserSessionRecord } from "./record";
+import type { BrowserSessionRecord, SessionRevocationReason } from "./record";
 
 export type SessionSaveOutcome = "stored" | "revision_conflict";
 
@@ -45,6 +45,13 @@ export interface SessionStore {
    * compare-and-swap issued before it — an idle-window slide, a rotation —
    * conflict instead of writing the pre-revocation state back.
    *
+   * It writes exactly the four columns below and reads none of the others, so
+   * it lands on a row the rest of the contract no longer accepts — a legacy
+   * row, a migration in flight. Adapters MUST NOT re-serialise the whole
+   * record here: that would make an unrelated stored defect refuse the one
+   * write that must never be refused. `revocationReason` arrives already
+   * canonicalised by the service and needs no adapter-side validation.
+   *
    * ```sql
    * UPDATE browser_sessions
    *    SET status = 'revoked', revoked_at = $2, revocation_reason = $3,
@@ -55,7 +62,7 @@ export interface SessionStore {
    */
   revoke(
     id: string,
-    revocation: { revocationReason: string; revokedAt: string },
+    revocation: { revocationReason: SessionRevocationReason; revokedAt: string },
   ): Promise<SessionRevokeOutcome>;
   /**
    * The one mutator without a precondition, and the only one that needs none:
@@ -98,7 +105,7 @@ export class InMemorySessionStore implements SessionStore {
 
   revoke(
     id: string,
-    revocation: { revocationReason: string; revokedAt: string },
+    revocation: { revocationReason: SessionRevocationReason; revokedAt: string },
   ): Promise<SessionRevokeOutcome> {
     const current = this.records.get(id);
     if (current === undefined) {

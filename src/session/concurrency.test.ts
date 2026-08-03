@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { Clock } from "../clock";
 import { SessionService } from "./lifecycle";
-import type { BrowserSessionRecord } from "./record";
+import type { BrowserSessionRecord, SessionRevocationReason } from "./record";
 import type { SessionRevokeOutcome, SessionSaveOutcome, SessionStore } from "./store";
 
 // Stand-in for the durable adapters this port exists for (Postgres, Redis):
@@ -47,7 +47,7 @@ class RemoteLatencySessionStore implements SessionStore {
 
   async revoke(
     id: string,
-    revocation: { revocationReason: string; revokedAt: string },
+    revocation: { revocationReason: SessionRevocationReason; revokedAt: string },
   ): Promise<SessionRevokeOutcome> {
     await this.roundTrip();
     const current = this.records.get(id);
@@ -129,6 +129,10 @@ interface ContentionOptions {
   refuseCreation?: boolean;
   // The conflict on which the competing writer is a revocation.
   revokeOnConflict?: number;
+  // The conflict on which the competing writer leaves the record outside
+  // `browser-session.v1` — a migration dropping a role from the enumeration
+  // while this request is in the middle of its retry budget.
+  corruptOnConflict?: number;
 }
 
 // A durable adapter under sustained contention: a competing writer always
@@ -174,6 +178,12 @@ class ContendedSessionStore implements SessionStore {
       moved.revokedAt = CONTENDED_REVOKED_AT;
       moved.revocationReason = "auth.session_revoked";
     }
+    if (
+      this.options.corruptOnConflict !== undefined &&
+      this.conflicts >= this.options.corruptOnConflict
+    ) {
+      moved.roles = ["ADMIN"];
+    }
     this.records.set(record.id, moved);
     return Promise.resolve("revision_conflict");
   }
@@ -181,7 +191,7 @@ class ContendedSessionStore implements SessionStore {
   // Unconditional by contract: the competing writer above cannot starve it.
   revoke(
     id: string,
-    revocation: { revocationReason: string; revokedAt: string },
+    revocation: { revocationReason: SessionRevocationReason; revokedAt: string },
   ): Promise<SessionRevokeOutcome> {
     const current = this.records.get(id);
     if (current === undefined) {
@@ -345,6 +355,24 @@ describe("revocation under concurrent writes", () => {
     if (persisted === undefined) throw new Error("expected a stored record");
     expect(resolved.record.revision).toBe(persisted.revision);
     expect(resolved.record.status).toBe("active");
+  });
+
+  test("a slide that runs out of attempts never authenticates a record the contract rejects", async () => {
+    const clock = fixedClock("2026-07-19T08:00:00.000Z");
+    // The record leaves `browser-session.v1` as the third slide attempt is
+    // refused, so it is conform on every read the loop validates through
+    // `persist()` and non-conform only on the read the decision is taken on.
+    const store = new ContendedSessionStore({ corruptOnConflict: 3 });
+    const service = await makeService(clock, store);
+    const created = await service.createSession(IDENTITY);
+
+    const resolved = await service.resolveSession(created.cookieValue);
+
+    expect(store.conflicts).toBe(3);
+    // This is the one path that could still answer `ok: true` on a record
+    // nothing downstream can use: abandoning the slide skips `persist()`, and
+    // with it the only contract check the read path used to have.
+    expect(resolved).toEqual({ code: "auth.session_missing", ok: false });
   });
 
   test("a revocation lands even when every compare-and-swap loses the race", async () => {

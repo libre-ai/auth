@@ -8,6 +8,7 @@ import {
   REFUSAL_RETENTION_MS,
   SessionService,
 } from "./lifecycle";
+import type { SessionRevocationReason } from "./record";
 import { InMemorySessionStore } from "./store";
 
 const registry = await loadCanonicalContractRegistry();
@@ -176,7 +177,15 @@ describe("revocation and state machine", () => {
     // cannot fail, so it wraps defensively and answers 204. If the call can
     // throw with the session left live, that 204 clears a cookie for a logout
     // the server never performed.
-    await service.revokeSession(created.cookieValue, reason).catch(() => undefined);
+    //
+    // The cast is the test standing in for the callers the type cannot reach:
+    // a JavaScript consumer, or a TypeScript one whose reason arrives as a
+    // widened `string` from its own boundary. Three of these four spellings
+    // no longer compile without it — that is the type doing its half of the
+    // work; the assertions below are the runtime doing the other half.
+    await service
+      .revokeSession(created.cookieValue, reason as SessionRevocationReason)
+      .catch(() => undefined);
 
     expect((await service.resolveSession(created.cookieValue)).ok).toBeFalse();
     const record = store.dump()[0];

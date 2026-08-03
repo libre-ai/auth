@@ -2,12 +2,36 @@ import { loadCanonicalContractRegistry } from "@libre-ai/contracts";
 
 import type { Clock } from "../clock";
 import { hmacSha256Hex, importHmacKey, randomOpaqueValue, sha256Hex } from "./digest";
-import type { BrowserSessionRecord, SessionIdentityFacts } from "./record";
+import type { BrowserSessionRecord, SessionIdentityFacts, SessionRevocationReason } from "./record";
 import type { SessionSaveOutcome, SessionStore } from "./store";
 
 export const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 export const ABSOLUTE_LIFETIME_MS = 12 * 60 * 60 * 1000;
 export const REFUSAL_RETENTION_MS = 24 * 60 * 60 * 1000;
+
+// The reason written when the caller's own is not one `browser-session.v1`
+// accepts. Not a fallback for convenience: see `canonicalRevocationReason`.
+export const CANONICAL_REVOCATION_REASON: SessionRevocationReason = "auth.session_revoked";
+
+// `revocationReason` in browser-session.v1. The literal is a copy, so the
+// tests pin it to its source rather than to itself: `a revocation with …
+// closes the session` validates the record this produces through the contract
+// registry, and fails if the canonical pattern moves away from this one.
+const REVOCATION_REASON_PATTERN = /^auth\.[a-z0-9_.-]+$/;
+
+/**
+ * Total, and deliberately so. The type above narrows the shape for a
+ * TypeScript caller; nothing narrows it for a JavaScript one, or for a
+ * `string` widened at some other boundary. Refusing an unusable reason would
+ * mean a revocation call that ends with the session still authenticating —
+ * the exact failure this whole branch exists to remove — so the malformed
+ * reason is replaced instead. Losing the caller's wording is a lesser harm
+ * than losing the logout, and the wording is evidence, not a decision: no
+ * refusal is ever taken on it.
+ */
+function canonicalRevocationReason(reason: SessionRevocationReason): SessionRevocationReason {
+  return REVOCATION_REASON_PATTERN.test(reason) ? reason : CANONICAL_REVOCATION_REASON;
+}
 
 // Budget for the compare-and-swap writes only — revocation is not one of them
 // (see `revokeSession`). A conflict means another writer moved the record
@@ -82,6 +106,23 @@ export class SessionService {
     for (let attempt = 1; ; attempt += 1) {
       const stored = await this.store.findByDigest(sessionDigest);
       if (stored === null) {
+        return { code: "auth.session_missing", ok: false };
+      }
+      if (!this.isContractConform(stored)) {
+        // A stored record `browser-session.v1` no longer accepts: a row
+        // written before a role left the enumeration, a migration in flight.
+        // Nothing downstream can use it — it cannot be slid, rotated, or
+        // projected to the browser — and until this gate the only thing
+        // stopping it was `persist()` throwing out of a read. A refusal is
+        // the fail-closed reading, and it reuses a code from the locked
+        // table: for this cookie there is no usable session, which discloses
+        // nothing an attacker could not already infer.
+        //
+        // It refuses rather than revokes on purpose. Revocation is terminal,
+        // so auto-revoking here would turn a repairable data defect — a
+        // migration halfway through a fleet — into an irreversible mass
+        // logout. `revokeSession` still lands on such a record, so an
+        // operator keeps the terminal move.
         return { code: "auth.session_missing", ok: false };
       }
       if (stored.status === "revoked") {
@@ -185,26 +226,31 @@ export class SessionService {
   // unconditionally (bar the terminal state) and bumps the revision itself,
   // which is what makes every compare-and-swap issued before it conflict
   // instead of writing the pre-revocation state back.
-  async revokeSession(cookieValue: string, reason: string): Promise<void> {
+  //
+  // Nothing on this path can refuse or throw of its own accord, and that is
+  // the property, not a convenience: every refusal removed from here is a
+  // caller that would otherwise have cleared a cookie for a logout the server
+  // never performed. Only the adapter can still fail, and the boundary
+  // answers a problem when it does rather than a 204.
+  async revokeSession(cookieValue: string, reason: SessionRevocationReason): Promise<void> {
+    // Canonicalised before the record is even read, so no decision below can
+    // depend on the caller's spelling.
+    const revocationReason = canonicalRevocationReason(reason);
     const sessionDigest = await hmacSha256Hex(this.digestKey, cookieValue);
     const stored = await this.store.findByDigest(sessionDigest);
     // Nothing left for this cookie to authenticate: revocation is idempotent.
     if (stored === null || stored.status === "revoked") {
       return;
     }
-    const revokedAt = this.clock.now().toISOString();
-    // The store owns this write's revision, so the contract check runs on the
-    // projection of what we ask it to write: a revocation reason that would
-    // make the record violate `browser-session.v1` must not reach the durable
-    // side just because this write skips `persist()`.
-    this.assertContractConform({
-      ...stored,
-      revision: stored.revision + 1,
-      revocationReason: reason,
-      revokedAt,
-      status: "revoked",
+    // Only what this write produces is checked, and it is conform by
+    // construction: a canonical reason, and a timestamp from the clock. The
+    // stored record is deliberately not validated here — `revoke()` does not
+    // rewrite it, and gating the logout on the conformity of fields this
+    // write never touches is what left a legacy row unclosable.
+    await this.store.revoke(stored.id, {
+      revocationReason,
+      revokedAt: this.clock.now().toISOString(),
     });
-    await this.store.revoke(stored.id, { revocationReason: reason, revokedAt });
   }
 
   async pruneExpired(): Promise<void> {
@@ -240,9 +286,12 @@ export class SessionService {
     return new Date(record.absoluteExpiresAt).getTime();
   }
 
+  private isContractConform(record: BrowserSessionRecord): boolean {
+    return this.registry.validate("browser-session.v1.schema.json", record).ok;
+  }
+
   private assertContractConform(record: BrowserSessionRecord): void {
-    const validation = this.registry.validate("browser-session.v1.schema.json", record);
-    if (!validation.ok) {
+    if (!this.isContractConform(record)) {
       throw new Error("auth.session_facts_invalid");
     }
   }
