@@ -32,6 +32,7 @@ export {
 } from "./oidc/transaction-store";
 export {
   ABSOLUTE_LIFETIME_MS,
+  CANONICAL_REVOCATION_REASON,
   type CreatedSession,
   IDLE_TIMEOUT_MS,
   REFUSAL_RETENTION_MS,
@@ -43,5 +44,11 @@ export type {
   BrowserSessionRecord,
   BrowserSessionStatus,
   SessionIdentityFacts,
+  SessionRevocationReason,
 } from "./session/record";
-export { InMemorySessionStore, type SessionStore } from "./session/store";
+export {
+  InMemorySessionStore,
+  type SessionRevokeOutcome,
+  type SessionSaveOutcome,
+  type SessionStore,
+} from "./session/store";

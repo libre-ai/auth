@@ -8,6 +8,7 @@ import {
   REFUSAL_RETENTION_MS,
   SessionService,
 } from "./lifecycle";
+import type { SessionRevocationReason } from "./record";
 import { InMemorySessionStore } from "./store";
 
 const registry = await loadCanonicalContractRegistry();
@@ -157,6 +158,66 @@ describe("revocation and state machine", () => {
 
     const resolved = await service.resolveSession(created.cookieValue);
     expect(resolved).toEqual({ code: "auth.session_revoked", ok: false });
+  });
+
+  // A revocation call must never end with a session that still authenticates.
+  // Two ways in: the reason the caller spells, and a stored record the
+  // contract no longer accepts.
+  test.each([
+    ["the canonical reason", "auth.session_revoked"],
+    ["a human sentence", "user requested logout"],
+    ["the canonical reason in upper case", "AUTH.SESSION_REVOKED"],
+    ["an empty reason", ""],
+  ])("a revocation with %s closes the session", async (_label, reason) => {
+    const clock = fixedClock("2026-07-19T08:00:00.000Z");
+    const { service, store } = await makeService(clock);
+    const created = await service.createSession(IDENTITY);
+
+    // The consumer this models is the documented one: the port says the call
+    // cannot fail, so it wraps defensively and answers 204. If the call can
+    // throw with the session left live, that 204 clears a cookie for a logout
+    // the server never performed.
+    //
+    // The cast is the test standing in for the callers the type cannot reach:
+    // a JavaScript consumer, or a TypeScript one whose reason arrives as a
+    // widened `string` from its own boundary. Three of these four spellings
+    // no longer compile without it — that is the type doing its half of the
+    // work; the assertions below are the runtime doing the other half.
+    await service
+      .revokeSession(created.cookieValue, reason as SessionRevocationReason)
+      .catch(() => undefined);
+
+    expect((await service.resolveSession(created.cookieValue)).ok).toBeFalse();
+    const record = store.dump()[0];
+    expect(record?.status).toBe("revoked");
+    // Whatever the caller spelled, what reaches the durable side is conform:
+    // the reason is a contract-locked field, not free text.
+    expect(registry.validate("browser-session.v1.schema.json", record).ok).toBeTrue();
+  });
+
+  test("a stored record the contract no longer accepts is refused, and stays revocable", async () => {
+    const clock = fixedClock("2026-07-19T08:00:00.000Z");
+    const { service, store } = await makeService(clock);
+    const created = await service.createSession(IDENTITY);
+    const stored = store.dump()[0];
+    if (stored === undefined) throw new Error("expected a stored record");
+
+    // Outside the caller's control: a row written before a role left the
+    // enumeration, or halfway through a migration. Written straight through
+    // the port, which is where such a row comes from.
+    await store.save({ ...stored, roles: ["ADMIN"] }, stored.revision);
+    expect(registry.validate("browser-session.v1.schema.json", store.dump()[0]).ok).toBeFalse();
+
+    // A refusal, not an exception escaping the service: a record nobody can
+    // use must not authenticate...
+    expect(await service.resolveSession(created.cookieValue)).toEqual({
+      code: "auth.session_missing",
+      ok: false,
+    });
+
+    // ...and must still be closable, or it sits there unusable and unclosable.
+    await service.revokeSession(created.cookieValue, "auth.session_revoked");
+    expect(store.dump()[0]?.status).toBe("revoked");
   });
 
   test("revoked and expired sessions never reactivate", async () => {

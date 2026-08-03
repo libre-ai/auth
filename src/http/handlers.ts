@@ -3,7 +3,11 @@ import { secureResponse } from "@libre-ai/web-platform";
 import { verifyCsrf } from "../csrf/verify";
 import { type OidcLoginFlow, RETURN_PATH_PATTERN } from "../oidc/transaction";
 import { randomOpaqueValue } from "../session/digest";
-import type { SessionService } from "../session/lifecycle";
+import {
+  CANONICAL_REVOCATION_REASON,
+  type CreatedSession,
+  type SessionService,
+} from "../session/lifecycle";
 
 export const OIDC_TRANSACTION_COOKIE = "__Host-libre_ai_oidc";
 export const SESSION_COOKIE = "__Host-libre_ai_session";
@@ -24,8 +28,23 @@ export interface AuthHttpBoundaryOptions {
 export class AuthHttpBoundary {
   constructor(private readonly options: AuthHttpBoundaryOptions) {}
 
-  async handleLogin(request: Request): Promise<Response> {
-    const requestId = newRequestId();
+  handleLogin(request: Request): Promise<Response> {
+    return guarded((requestId) => this.login(request, requestId));
+  }
+
+  handleCallback(request: Request): Promise<Response> {
+    return guarded((requestId) => this.callback(request, requestId));
+  }
+
+  handleGetSession(request: Request): Promise<Response> {
+    return guarded((requestId) => this.readSession(request, requestId));
+  }
+
+  handleDeleteSession(request: Request): Promise<Response> {
+    return guarded((requestId) => this.deleteSession(request, requestId));
+  }
+
+  private async login(request: Request, requestId: string): Promise<Response> {
     if (!this.originAllowed(request)) {
       return problemResponse(403, "auth.csrf_invalid", requestId);
     }
@@ -49,8 +68,7 @@ export class AuthHttpBoundary {
     return secureResponse(response);
   }
 
-  async handleCallback(request: Request): Promise<Response> {
-    const requestId = newRequestId();
+  private async callback(request: Request, requestId: string): Promise<Response> {
     const url = new URL(request.url);
     const code = url.searchParams.get("code") ?? "";
     const state = url.searchParams.get("state") ?? "";
@@ -70,7 +88,14 @@ export class AuthHttpBoundary {
       return problemResponse(400, completed.code, requestId);
     }
 
-    const created = await this.options.sessions.createSession(completed.facts);
+    // `createSession` fails closed — an unstorable record must not yield a
+    // cookie that authenticates nothing — and this is the only endpoint that
+    // calls it. That refusal is answered by the fence around every handler
+    // below, as `500 web.internal_error`: the browser is owed a response
+    // either way, and the failure is a server fault rather than an auth
+    // refusal, so it maps onto the platform's generic code instead of
+    // extending the auth refusal table.
+    const created: CreatedSession = await this.options.sessions.createSession(completed.facts);
     const response = new Response(null, {
       headers: { Location: completed.returnPath },
       status: 303,
@@ -86,8 +111,7 @@ export class AuthHttpBoundary {
     return secureResponse(response);
   }
 
-  async handleGetSession(request: Request): Promise<Response> {
-    const requestId = newRequestId();
+  private async readSession(request: Request, requestId: string): Promise<Response> {
     const cookieValue = readCookie(request, SESSION_COOKIE);
     if (cookieValue === null) {
       return problemResponse(401, "auth.session_missing", requestId);
@@ -111,8 +135,7 @@ export class AuthHttpBoundary {
     );
   }
 
-  async handleDeleteSession(request: Request): Promise<Response> {
-    const requestId = newRequestId();
+  private async deleteSession(request: Request, requestId: string): Promise<Response> {
     const cookieValue = readCookie(request, SESSION_COOKIE);
     if (cookieValue === null) {
       return problemResponse(401, "auth.session_missing", requestId);
@@ -139,7 +162,14 @@ export class AuthHttpBoundary {
       return problemResponse(412, "auth.session_revision_mismatch", requestId);
     }
 
-    await this.options.sessions.revokeSession(cookieValue, "auth.session_revoked");
+    // The 412 above is the client's precondition, and the only one on this
+    // path. The revocation itself carries no revision precondition — it is
+    // monotone and terminal, so it lands whatever concurrent writers did, and
+    // 204 here never means "cleared your cookie for a logout that did not
+    // happen". If the adapter under it fails, the fence answers a problem and
+    // the two lines below never run: the cookie survives a logout that did
+    // not land, which is the direction a failure must fall.
+    await this.options.sessions.revokeSession(cookieValue, CANONICAL_REVOCATION_REASON);
     const response = new Response(null, { status: 204 });
     response.headers.append(
       "Set-Cookie",
@@ -154,6 +184,23 @@ export class AuthHttpBoundary {
       request.headers.get("Origin") === this.options.allowedOrigin &&
       (secFetchSite === null || secFetchSite === "same-origin")
     );
+  }
+}
+
+// Every handler is the outermost frame of a browser request, and every one of
+// them calls an adapter that can fail for reasons the handler does not
+// control — a store round trip, a token endpoint. The browser is owed a
+// Response; an escaped throw is a request that answers nothing, on a path
+// that may already have mutated server state. The request id is minted here
+// so a refusal and the fence that replaces it are indistinguishable from
+// outside, and the error itself is never echoed: a refusal discloses the
+// stable code only.
+async function guarded(run: (requestId: string) => Promise<Response>): Promise<Response> {
+  const requestId = newRequestId();
+  try {
+    return await run(requestId);
+  } catch {
+    return problemResponse(500, "web.internal_error", requestId);
   }
 }
 
