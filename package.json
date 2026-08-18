@@ -42,7 +42,7 @@
   "dependencies": {},
   "devDependencies": {
     "@playwright/test": "1.61.1",
-    "@libre-ai/governance": "github:libre-ai/governance#9511c4087f284d0242fc4a202b2f1452228c16c3",
+    "@libre-ai/governance": "github:libre-ai/governance#9cd1d421d318129db99456d963f4bc1cfad67b33",
     "@biomejs/biome": "2.5.3",
     "@types/bun": "1.3.14",
     "typescript": "7.0.2",

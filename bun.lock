@@ -7,7 +7,7 @@
       "devDependencies": {
         "@biomejs/biome": "2.5.3",
         "@libre-ai/contracts": "github:libre-ai/sdk-ts#da9d510cce0c28283837bfb6c9efe82641cbe083",
-        "@libre-ai/governance": "github:libre-ai/governance#9511c4087f284d0242fc4a202b2f1452228c16c3",
+        "@libre-ai/governance": "github:libre-ai/governance#9cd1d421d318129db99456d963f4bc1cfad67b33",
         "@libre-ai/web-platform": "github:libre-ai/web-platform#a0754b69b4205e31a0c560f9729bd8d2d8556357",
         "@playwright/test": "1.61.1",
         "@types/bun": "1.3.14",
@@ -45,7 +45,7 @@
 
     "@libre-ai/contracts": ["@libre-ai/contracts@github:libre-ai/sdk-ts#da9d510", { "dependencies": { "ajv": "8.20.0", "ajv-formats": "3.0.1" } }, "libre-ai-sdk-ts-da9d510", "sha512-LIpDb3RUkJq6uljCyyKIMIjouVwk9nZ2s2yUVC76ZiiB3pt07gf/E58do+HvtXZnmNB1dA9FNMY9LBREOSQeRg=="],
 
-    "@libre-ai/governance": ["@libre-ai/governance@github:libre-ai/governance#9511c40", { "dependencies": { "ajv": "8.20.0", "ajv-formats": "3.0.1", "entities": "8.0.0" } }, "libre-ai-governance-9511c40", "sha512-RmGWaEDxLaebHhByodcWDlsRNAVMVLqqHL60fzaGf58pIccBvW2IanU8m/CBbjjx6wihloueDIbBCGCWchxkDw=="],
+    "@libre-ai/governance": ["@libre-ai/governance@github:libre-ai/governance#9cd1d42", { "dependencies": { "ajv": "8.20.0", "ajv-formats": "3.0.1", "entities": "8.0.0" } }, "libre-ai-governance-9cd1d42", "sha512-vzThmVlYu0CvDUJFsK/LU4qNZk4apGgpyp0DcnXvu1XObiO0CCOV8jFzPRIMz+C+bq+UALuoMJpA6nsdtuEuIw=="],
 
     "@libre-ai/web-platform": ["@libre-ai/web-platform@github:libre-ai/web-platform#a0754b6", { "peerDependencies": { "react": "19.2.7", "react-dom": "19.2.7" } }, "libre-ai-web-platform-a0754b6", "sha512-dBaaMGNVqAwJwudkK5Y0Uq9M+nDkpKF9xHR2PWxX8571NRT8R1EgRGGVIq3t6PNzl7BcwIgoE8Ke7iJpjslOMA=="],
 
